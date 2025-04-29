@@ -446,7 +446,7 @@
                 每層用電量: "",
                 本期用電: "206.3",
                 本期應納: "1032",
-                繳納人: ""
+                繳納人: "騰哥"
             },
             {
                 樓層: "4F",
@@ -635,9 +635,28 @@
             
             periods.forEach(period => {
                 const periodData = groupedHistory[period];
-                const totalUsage = periodData.reduce((sum, row) => sum + parseFloat(row.用電量 || 0), 0).toFixed(1);
-                const totalAmount = periodData.reduce((sum, row) => sum + parseFloat(row.本期應納 || 0), 0);
                 
+                // 計算總用電量和總金額（不包含重複計算騰哥的金額）
+                let totalUsage = 0;
+                let totalAmount = 0;
+                const processedTenants = new Set();
+
+                periodData.forEach(row => {
+                    totalUsage += parseFloat(row.用電量 || 0);
+                    
+                    // 對於騰哥的資料特別處理
+                    if (row.繳納人 === '騰哥') {
+                        if (!processedTenants.has('騰哥')) {
+                            const tengRows = periodData.filter(r => r.繳納人 === '騰哥');
+                            const tengTotalAmount = tengRows.reduce((sum, r) => sum + parseFloat(r.本期應納 || 0), 0);
+                            totalAmount += tengTotalAmount;
+                            processedTenants.add('騰哥');
+                        }
+                    } else {
+                        totalAmount += parseFloat(row.本期應納 || 0);
+                    }
+                });
+
                 const section = document.createElement('div');
                 section.className = 'accordion-section';
                 
@@ -650,7 +669,7 @@
                     <div>
                         ${year}年${monthNum}-${monthNum+1}月
                         <span class="period-summary">
-                            總用電量: ${totalUsage} 度，
+                            總用電量: ${totalUsage.toFixed(1)} 度，
                             總金額: ${totalAmount} 元
                         </span>
                     </div>
@@ -680,21 +699,45 @@
                         </tr>
                     </thead>
                     <tbody>
-                        ${periodData.map(row => `
-                            <tr>
-                                <td>${row.樓層}</td>
-                                <td>${row.室}</td>
-                                <td>${row.錶號}</td>
-                                <td>${row.切表日}</td>
-                                <td>${row.切表度數}</td>
-                                <td>${row.抄表日}</td>
-                                <td>${row.抄表度數}</td>
-                                <td>${row.用電量}</td>
-                                <td>${row.級距每度}</td>
-                                <td>${row.本期應納}</td>
-                                <td>${row.繳納人}</td>
-                            </tr>
-                        `).join('')}
+                        ${(() => {
+                            // 計算騰哥的總應納金額
+                            const tengRows = periodData.filter(row => row.繳納人 === '騰哥');
+                            let tengTotalAmount = 0;
+                            if (tengRows.length > 1) {
+                                tengTotalAmount = tengRows.reduce((sum, row) => sum + (parseFloat(row.本期應納) || 0), 0);
+                            }
+
+                            const rows = periodData.map(row => {
+                                const isMultipleTengMeters = tengRows.length > 1 && row.繳納人 === '騰哥';
+                                const amount = isMultipleTengMeters ? tengTotalAmount : row.本期應納;
+                                return `
+                                    <tr>
+                                        <td>${row.樓層}</td>
+                                        <td>${row.室}</td>
+                                        <td>${row.錶號}</td>
+                                        <td>${row.切表日}</td>
+                                        <td>${row.切表度數}</td>
+                                        <td>${row.抄表日}</td>
+                                        <td>${row.抄表度數}</td>
+                                        <td>${row.用電量}</td>
+                                        <td>${row.級距每度}</td>
+                                        <td>${amount}</td>
+                                        <td>${row.繳納人}</td>
+                                    </tr>
+                                `;
+                            }).join('');
+
+                            // 添加總計行
+                            return rows + `
+                                <tr style="font-weight: bold; background-color: #f0f0f0;">
+                                    <td colspan="7" style="text-align: right">總計：</td>
+                                    <td>${totalUsage.toFixed(1)}</td>
+                                    <td></td>
+                                    <td>${totalAmount}</td>
+                                    <td></td>
+                                </tr>
+                            `;
+                        })()}
                     </tbody>
                 `;
                 
@@ -745,7 +788,17 @@
                 document.querySelectorAll('.tenant-view').forEach(el => el.style.display = 'block');
                 
                 // 顯示該房客的資料
-                const filteredData = allData.filter(row => row.繳納人 === selectedTenant);
+                let filteredData = allData.filter(row => row.繳納人 === selectedTenant);
+
+                // 如果是騰哥，合併應納金額
+                if (selectedTenant === '騰哥' && filteredData.length > 1) {
+                    const totalAmount = filteredData.reduce((sum, row) => sum + (parseFloat(row.本期應納) || 0), 0);
+                    filteredData = filteredData.map(row => ({
+                        ...row,
+                        本期應納: totalAmount.toString()
+                    }));
+                }
+
                 displayData(filteredData);
             }
         }
@@ -769,7 +822,7 @@
             tbody.innerHTML = '';
             
             const selectedTenant = document.getElementById('tenantSelect').value;
-            const filteredData = selectedTenant ? data.filter(row => row.繳納人 === selectedTenant) : data;
+            let filteredData = selectedTenant ? data.filter(row => row.繳納人 === selectedTenant) : data;
             
             if (filteredData.length === 0) {
                 tbody.innerHTML = `
@@ -781,9 +834,42 @@
                 `;
                 return;
             }
+
+            // 計算總用電量和總金額
+            let totalUsage = 0;
+            let totalAmount = 0;
+
+            // 如果是騰哥的資料，計算總應納金額
+            const tengRows = filteredData.filter(row => row.繳納人 === '騰哥');
+            let tengTotalAmount = 0;
             
+            if (tengRows.length > 1) {
+                tengTotalAmount = tengRows.reduce((sum, row) => {
+                    const usage = parseFloat(row.用電量) || 0;
+                    const rate = parseFloat(row.級距每度) || 0;
+                    return sum + (usage * rate);
+                }, 0);
+            }
+            
+            // 顯示所有行
             filteredData.forEach(row => {
                 const tr = document.createElement('tr');
+                const usage = parseFloat(row.用電量) || 0;
+                const rate = parseFloat(row.級距每度) || 0;
+                const amount = (usage * rate).toFixed(1);
+                
+                totalUsage += usage;
+                if (row.繳納人 === '騰哥') {
+                    if (tengRows.length > 1) {
+                        // 不在這裡加總，因為已經在 tengTotalAmount 中計算過了
+                        totalAmount = tengTotalAmount;
+                    } else {
+                        totalAmount = parseFloat(amount);
+                    }
+                } else {
+                    totalAmount += parseFloat(amount);
+                }
+                
                 tr.innerHTML = `
                     <td>${row.樓層}</td>
                     <td>${row.室}</td>
@@ -796,11 +882,25 @@
                     <td>${row.級距每度}</td>
                     <td>${row.每層用電量}</td>
                     <td>${row.本期用電}</td>
-                    <td>${row.本期應納}</td>
+                    <td>${tengRows.length > 1 && row.繳納人 === '騰哥' ? tengTotalAmount.toFixed(1) : amount}</td>
                     <td>${row.繳納人}</td>
                 `;
                 tbody.appendChild(tr);
             });
+
+            // 添加總計行
+            const totalRow = document.createElement('tr');
+            totalRow.style.fontWeight = 'bold';
+            totalRow.style.backgroundColor = '#f0f0f0';
+            totalRow.innerHTML = `
+                <td colspan="7" style="text-align: right">總計：</td>
+                <td>${totalUsage.toFixed(1)}</td>
+                <td colspan="2"></td>
+                <td>${totalUsage.toFixed(1)}</td>
+                <td>${totalAmount.toFixed(1)}</td>
+                <td></td>
+            `;
+            tbody.appendChild(totalRow);
         }
 
         // 設定搜尋功能
